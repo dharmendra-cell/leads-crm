@@ -6,6 +6,7 @@ import LogoutButton from "@/components/LogoutButton";
 const NAV = [
   ["/dashboard", "Dashboard"],
   ["/leads", "Leads"],
+  ["/activity", "Calls"],
   ["/import", "Import"],
   ["/ranking", "Ranking"],
   ["/ask", "Ask & Insights"],

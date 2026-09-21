@@ -222,3 +222,19 @@ describe("business ranking", () => {
     expect(rankingSchema.safeParse({ ...cfg, products: [{ keyword: "x1", weight: 99 }] }).success).toBe(false);
   });
 });
+
+import { bucketKey } from "../lib/activity";
+
+describe("call activity buckets (IST)", () => {
+  it("daily, weekly (Monday start) and monthly keys", () => {
+    const d = new Date("2026-09-24T10:00:00+05:30"); // Thursday
+    expect(bucketKey(d, "day")).toBe("2026-09-24");
+    expect(bucketKey(d, "week")).toBe("2026-09-21"); // Monday
+    expect(bucketKey(d, "month")).toBe("2026-09");
+    expect(bucketKey(new Date("2026-09-27T23:59:00+05:30"), "week")).toBe("2026-09-21"); // Sunday belongs to the same week
+  });
+  it("uses IST, not UTC, for late-night calls", () => {
+    expect(bucketKey(new Date("2026-09-30T20:00:00Z"), "day")).toBe("2026-10-01"); // 01:30 IST next day
+    expect(bucketKey(new Date("2026-09-30T20:00:00Z"), "month")).toBe("2026-10");
+  });
+});
