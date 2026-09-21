@@ -22,6 +22,7 @@ export default function ImportPage() {
   const [err, setErr] = useState("");
   const [history, setHistory] = useState<{ id: string; fileName: string; source: string; inserted: number; duplicates: number; createdAt: string; steps: Step[] }[]>([]);
   const [refresh, setRefresh] = useState(0);
+  const [notice, setNotice] = useState("");
   const loadHistory = async () => setHistory(await (await fetch("/api/import/history")).json());
   useEffect(() => { loadHistory(); }, []);
 
@@ -38,6 +39,33 @@ export default function ImportPage() {
   }
 
   const upd = (i: number, patch: Partial<SheetState>) => setSheets((all) => all && all.map((s, k) => (k === i ? { ...s, ...patch } : s)));
+  async function deleteImport(h: { id: string; fileName: string; source: string; inserted: number }) {
+    const info = await (await fetch(`/api/import/${h.id}`)).json();
+    if (info.error) return setErr(info.error);
+    const warn = info.withLoggedCalls ? `\n\n${info.withLoggedCalls} of them have calls/notes you logged in this app. Those will be lost too.` : "";
+    if (!window.confirm(`Delete "${h.fileName}" (${h.source})?\n\nThis permanently deletes ${info.leads} leads and their call history.${warn}`)) return;
+    const res = await fetch(`/api/import/${h.id}`, { method: "DELETE" });
+    const j = await res.json();
+    if (!res.ok) return setErr(j.error ?? "Delete failed");
+    setNotice(`Deleted ${j.deletedLeads} leads from "${h.fileName}".`);
+    await loadHistory();
+    setRefresh((n) => n + 1);
+  }
+
+  async function deleteAll() {
+    const info = await (await fetch("/api/data")).json();
+    if (!info.leads && !info.imports) return setNotice("There is no data to delete.");
+    const typed = window.prompt(`This permanently deletes ALL ${info.leads} leads, their call history, ${info.imports} import records and saved column mappings.\nYour login stays.\n\nType DELETE to confirm:`);
+    if (typed !== "DELETE") return;
+    const res = await fetch("/api/data", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: "DELETE" }) });
+    const j = await res.json();
+    if (!res.ok) return setErr(j.error ?? "Delete failed");
+    setNotice(`Deleted ${j.deletedLeads} leads and ${j.deletedImports} imports.`);
+    setSheets((all) => all && all.map((x) => ({ ...x, done: null })));
+    await loadHistory();
+    setRefresh((n) => n + 1);
+  }
+
   const totals = (sheets ?? []).reduce((t, s) => (s.done ? { n: t.n + 1, inserted: t.inserted + s.done.inserted, dup: t.dup + s.done.duplicates } : t), { n: 0, inserted: 0, dup: 0 });
   const sheetProblem = (s: SheetState) => (!s.source.trim() ? "Enter a source name" : !s.mapping.phone && !s.mapping.email ? "Map a phone or email column" : "");
 
@@ -72,6 +100,7 @@ export default function ImportPage() {
         <input type="file" accept=".xlsx,.xls,.csv" onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
         {busy && <p className="text-sm text-indigo-600 mt-3">{busy}</p>}
         {err && <p className="text-sm text-red-600 mt-3">{err}</p>}
+        {notice && <p className="text-sm text-emerald-700 mt-3">{notice}</p>}
       </div>
 
       <ClassifyRemarks refreshKey={refresh} />
@@ -144,11 +173,23 @@ export default function ImportPage() {
           <h2 className="font-semibold mb-2">Previous imports</h2>
           <ul className="text-sm divide-y">
             {history.map((h) => (
-              <li key={h.id} className="py-2"><details><summary className="cursor-pointer">{h.fileName} - {h.source} - {h.inserted} new, {h.duplicates} dup - {new Date(h.createdAt).toLocaleDateString("en-IN")}</summary><div className="mt-2"><AgentSteps steps={h.steps} /></div></details></li>
+              <li key={h.id} className="py-2 flex items-start gap-3">
+                <details className="flex-1">
+                  <summary className="cursor-pointer">{h.fileName} - {h.source} - {h.inserted} new, {h.duplicates} dup - {new Date(h.createdAt).toLocaleDateString("en-IN")}</summary>
+                  <div className="mt-2"><AgentSteps steps={h.steps} /></div>
+                </details>
+                <button className="btn text-red-700 border-red-200 hover:bg-red-50" onClick={() => deleteImport(h)}>Delete</button>
+              </li>
             ))}
           </ul>
         </div>
       )}
+
+      <div className="card p-5 border-red-200">
+        <h2 className="font-semibold text-red-700 mb-1">Danger zone</h2>
+        <p className="text-sm text-gray-600 mb-3">Remove every lead, call history, import record and saved column mapping from this workspace so you can start fresh. Your login is not affected.</p>
+        <button className="btn text-red-700 border-red-300 hover:bg-red-50" onClick={deleteAll}>Delete all imported data</button>
+      </div>
     </div>
   );
 }
