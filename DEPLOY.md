@@ -4,7 +4,7 @@ Total cost: 0. No credit card needed for any of these.
 
 ## 1. Database (Neon)
 
-1. Sign up at https://neon.tech and create a project (region: Singapore is closest to India).
+1. Sign up at https://neon.tech and create a project (region: pick the region closest to your Vercel functions (vercel.json "regions"; default iad1 pairs with Neon us-east-2)).
 2. On the dashboard, copy two connection strings:
    - **Pooled** (host contains `-pooler`) -> `DATABASE_URL`
    - **Direct** (toggle "Pooled connection" off) -> `DIRECT_URL`
