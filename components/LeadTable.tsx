@@ -48,7 +48,7 @@ export default function LeadTable({ filters, pageSize = 25, showControls = true,
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="text-left text-xs text-gray-500 bg-gray-50">
-            <tr><th className="p-2">Lead</th><th>Phone</th><th>Source</th><th>Wants</th><th>City</th><th>Status</th><th>Follow-up</th></tr>
+            <tr><th className="p-2">Lead</th><th>Phone</th><th>Source</th><th>Wants</th><th>City</th><th>Score</th><th>Status</th><th>Follow-up</th></tr>
           </thead>
           <tbody>
             {data?.leads.map((l) => (
@@ -58,11 +58,12 @@ export default function LeadTable({ filters, pageSize = 25, showControls = true,
                 <td className="whitespace-nowrap">{l.source}</td>
                 <td className="max-w-[220px] truncate">{l.requirement ?? "-"}</td>
                 <td>{l.city ?? "-"}</td>
+                <td><span className={`px-1.5 py-0.5 rounded text-xs font-medium ${l.score >= 70 ? "bg-emerald-100 text-emerald-800" : l.score >= 45 ? "bg-amber-100 text-amber-800" : "bg-gray-100 text-gray-600"}`}>{l.score}</span></td>
                 <td><StatusBadge status={l.status} /></td>
                 <td className={`whitespace-nowrap ${isOverdue(l.nextFollowUp) && !["WON", "LOST", "NOT_INTERESTED"].includes(l.status) ? "text-red-600 font-medium" : ""}`}>{fmtDate(l.nextFollowUp)}</td>
               </tr>
             ))}
-            {data && data.leads.length === 0 && <tr><td colSpan={7} className="p-6 text-center text-gray-500">No leads match.</td></tr>}
+            {data && data.leads.length === 0 && <tr><td colSpan={8} className="p-6 text-center text-gray-500">No leads match.</td></tr>}
           </tbody>
         </table>
       </div>

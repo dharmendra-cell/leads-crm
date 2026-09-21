@@ -3,7 +3,7 @@ import { getSession, unauthorized } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { buildWhere, filtersFromParams } from "@/lib/filters";
 import { normalizePhone } from "@/lib/phone";
-import { scoreLead } from "@/lib/importer";
+import { getRankingConfig, scoreForLead } from "@/lib/ranking";
 
 const SORTS = {
   score: [{ score: "desc" }, { createdAt: "desc" }],
@@ -43,6 +43,6 @@ export async function POST(req: Request) {
     company: b.company?.slice(0, 200) || null, city: b.city?.slice(0, 100) || null,
     requirement: b.requirement?.slice(0, 300) || null, email: b.email?.toLowerCase() || null, queryDate: new Date(),
   };
-  const lead = await prisma.lead.create({ data: { ...data, score: scoreLead({ ...data, message: null }) } });
+  const lead = await prisma.lead.create({ data: { ...data, score: scoreForLead(data, await getRankingConfig(s.oid)) } });
   return NextResponse.json(lead, { status: 201 });
 }

@@ -8,7 +8,7 @@ interface Interaction { id: string; type: string; outcome: string | null; note: 
 interface Detail {
   id: string; name: string | null; company: string | null; phone: string | null; altPhone: string | null; email: string | null;
   city: string | null; state: string | null; address: string | null; source: string; status: string; requirement: string | null;
-  message: string | null; callAttempts: number; nextFollowUp: string | null; queryDate: string | null; score: number; interactions: Interaction[];
+  message: string | null; callAttempts: number; nextFollowUp: string | null; queryDate: string | null; score: number; interactions: Interaction[]; scoreParts?: { label: string; points: number; detail?: string }[];
 }
 
 export default function LeadDrawer({ id, onClose, onChanged }: { id: string; onClose: () => void; onChanged: () => void }) {
@@ -58,6 +58,17 @@ export default function LeadDrawer({ id, onClose, onChanged }: { id: string; onC
               <StatusBadge status={lead.status} />
               <span className="text-xs text-gray-500">Score {lead.score} - {lead.callAttempts} call attempts</span>
             </div>
+
+            {lead.scoreParts && lead.scoreParts.length > 0 && (
+              <details className="text-xs text-gray-600">
+                <summary className="cursor-pointer">Why score {lead.score}? <span className="text-gray-400">(business ranking)</span></summary>
+                <ul className="mt-1 space-y-0.5">
+                  {lead.scoreParts.map((p) => (
+                    <li key={p.label} className="flex justify-between gap-3"><span>{p.label}{p.detail ? <span className="text-gray-400"> - {p.detail}</span> : null}</span><b className={p.points < 0 ? "text-red-600" : "text-emerald-700"}>{p.points > 0 ? "+" : ""}{p.points}</b></li>
+                  ))}
+                </ul>
+              </details>
+            )}
 
             <div className="text-sm space-y-1">
               {lead.phone && <p><a className="text-blue-600 underline" href={`tel:${lead.phone}`}>{lead.phone}</a>{lead.altPhone && <> / <a className="text-blue-600 underline" href={`tel:${lead.altPhone}`}>{lead.altPhone}</a></>}</p>}

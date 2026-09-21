@@ -1,6 +1,7 @@
 import { prisma } from "./db";
 import { DATE_DIMS, TERMINAL, type Dimension } from "./constants";
 import { buildWhere, type Filters } from "./filters";
+import { getRankingConfig } from "./ranking";
 
 export interface Bucket { key: string; count: number }
 export type Breakdowns = Record<Dimension, Bucket[]>;
@@ -56,6 +57,7 @@ export async function callProgress(orgId: string, f: Filters, by: Dimension): Pr
 export async function getStats(orgId: string, f: Filters, by: Dimension = "source") {
   const where = buildWhere(orgId, f);
   const now = new Date();
+  const hotThreshold = (await getRankingConfig(orgId)).hotThreshold;
   // Day-level view only makes sense once the range is narrowed to about a month.
   const showDay = !!(f.month || f.from || f.day);
   const [total, contacted, interested, won, dueToday, hot, pendingRemarks, progress, source, status, state, city, requirement, month, day] = await Promise.all([
@@ -64,7 +66,7 @@ export async function getStats(orgId: string, f: Filters, by: Dimension = "sourc
     prisma.lead.count({ where: { AND: [where, { status: "INTERESTED" }] } }),
     prisma.lead.count({ where: { AND: [where, { status: "WON" }] } }),
     prisma.lead.count({ where: { AND: [where, { nextFollowUp: { lte: now }, status: { notIn: TERMINAL } }] } }),
-    prisma.lead.count({ where: { AND: [where, { score: { gte: 70 }, status: "NEW" }] } }),
+    prisma.lead.count({ where: { AND: [where, { score: { gte: hotThreshold }, status: "NEW" }] } }),
     prisma.lead.count({ where: { AND: [where, { remarkPending: true }] } }),
     callProgress(orgId, f, by),
     breakdown(orgId, f, "source", 12),

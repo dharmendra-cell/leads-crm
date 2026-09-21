@@ -19,6 +19,7 @@ model Organization {
   leads     Lead[]
   imports   Import[]
   templates MappingTemplate[]
+  ranking   RankingConfig?
 }
 
 model User {
@@ -111,4 +112,12 @@ model Interaction {
   createdAt DateTime @default(now())
 
   @@index([leadId])
+}
+
+// Per-workspace lead-ranking rules (product weights, quantity tiers, locations, sources). JSON keeps the schema stable.
+model RankingConfig {
+  orgId     String       @id
+  org       Organization @relation(fields: [orgId], references: [id])
+  config    String
+  updatedAt DateTime     @updatedAt
 }

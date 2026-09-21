@@ -4,6 +4,7 @@ import { parseDate } from "./dates";
 import { FIELDS, type Mapping } from "./mapping";
 import type { Row } from "./parse";
 import { STATES } from "./geo";
+import { DEFAULT_RANKING, getRankingConfig, scoreForLead, type RankingConfig } from "./ranking";
 import { classifyText, inferStatus } from "./feedback";
 import { randomUUID } from "crypto";
 
@@ -44,19 +45,6 @@ const clean = (v: string | undefined, max = 2000) => {
 /** Spreadsheet formulas in exported data ("=HYPERLINK(...)") are neutralised so re-export is safe. */
 const safe = (s: string | null) => (s && /^[=+\-@]/.test(s) && !/^\+?\d[\d\s-]*$/.test(s) ? `'${s}` : s);
 
-export function scoreLead(l: Pick<LeadInput, "phone" | "email" | "company" | "message" | "requirement" | "queryDate">, now = new Date()): number {
-  let s = 0;
-  if (l.phone) s += 30;
-  if (l.email) s += 15;
-  if (l.company) s += 10;
-  if (l.requirement) s += 15;
-  if (l.message && l.message.length > 30) s += 15;
-  if (l.queryDate && now.getTime() - l.queryDate.getTime() < 7 * 86400_000) s += 15;
-  return s;
-}
-
-
-
 /**
  * "Pune, Maharashtra, India" -> Pune / Maharashtra. Free-text street addresses without a state
  * ("Indrani Nagar, Indore") take the last part as the city. Best effort.
@@ -71,8 +59,7 @@ export function splitAddress(addr: string | null): { city: string | null; state:
   const last = parts[parts.length - 1];
   if (STATES.has(last.toLowerCase())) {
     const state = last;
-    const city = parts.length >= 2 ? parts[parts.length - 2] : state;
-    return { city, state };
+    return { city: parts.length >= 2 ? parts[parts.length - 2] : null, state };
   }
   // "Indore Madhya Pradesh" style: trailing state name glued to city
   const glued = [...STATES].find((st) => last.toLowerCase().endsWith(` ${st}`));
@@ -81,7 +68,7 @@ export function splitAddress(addr: string | null): { city: string | null; state:
 }
 
 /** Pure: raw rows + mapping -> normalised leads. */
-export function transformRows(rows: Row[], mapping: Mapping, source: string, now = new Date()) {
+export function transformRows(rows: Row[], mapping: Mapping, source: string, now = new Date(), ranking: RankingConfig = DEFAULT_RANKING) {
   const leads: LeadInput[] = [];
   const invalid: { row: number; reason: string }[] = [];
   const seen = new Set<string>();
@@ -137,7 +124,7 @@ export function transformRows(rows: Row[], mapping: Mapping, source: string, now
       score: 0,
       raw: JSON.stringify(r),
     };
-    lead.score = scoreLead(lead, now);
+    lead.score = scoreForLead(lead, ranking, now);
     leads.push(lead);
   });
   return { leads, invalid, dupInFile, blank };
@@ -161,7 +148,7 @@ export async function commitImport(args: {
   };
 
   const { leads, invalid, dupInFile } = await time("normalize", async () => {
-    const v = transformRows(args.rows, args.mapping, args.source);
+    const v = transformRows(args.rows, args.mapping, args.source, new Date(), await getRankingConfig(args.orgId));
     return {
       status: v.invalid.length ? "warn" : "ok",
       detail: `${v.leads.length} valid leads; skipped ${v.blank} blank rows, ${v.invalid.length} with no usable phone/email, ${v.dupInFile} repeated inside file`,

@@ -133,6 +133,7 @@ describe("misc", () => {
   it("splits addresses", () => {
     expect(splitAddress("Pune, Maharashtra, India")).toEqual({ city: "Pune", state: "Maharashtra" });
     expect(splitAddress("Indore")).toEqual({ city: "Indore", state: null });
+    expect(splitAddress("Madhya Pradesh, India")).toEqual({ city: null, state: "Madhya Pradesh" });
     expect(splitAddress("Dewas Naka, Indrani Nagar, Indore")).toEqual({ city: "Indore", state: null });
     expect(splitAddress("Indore, Madhya Pradesh 452010")).toEqual({ city: "Indore", state: "Madhya Pradesh" });
   });
@@ -180,5 +181,44 @@ describe("date filters (IST)", () => {
   });
   it("ignores invalid values", () => {
     expect(dateRange({ month: "nope", from: "13-13-2026" })).toBeUndefined();
+  });
+});
+
+import { parseQuantity, scoreWithBreakdown, scoreForLead, DEFAULT_RANKING, rankingSchema } from "../lib/ranking";
+
+describe("business ranking", () => {
+  const cfg = rankingSchema.parse({
+    products: [{ keyword: "wet wipes", weight: 20 }, { keyword: "baby wipes", weight: 20 }, { keyword: "diaper", weight: -10 }],
+    unmatchedPenalty: -10,
+    quantityTiers: [{ min: 1000, points: 15 }, { min: 100, points: 10 }],
+    locations: [{ name: "Indore", weight: 10 }, { name: "Assam", weight: -5 }],
+    sources: [{ source: "IndiaMART Direct", weight: 8 }],
+    hotThreshold: 60,
+  });
+  const base = { phone: "+919876543210", email: "a@b.com", company: "Co", requirement: "Wet Wipes-3000 Piece", city: "Indore", state: "Madhya Pradesh", source: "IndiaMART Direct", queryDate: new Date() };
+
+  it("parses the biggest quantity, ignores plain numbers", () => {
+    expect(parseQuantity("Wet Wipes-3000 Piece")).toBe(3000);
+    expect(parseQuantity("50 packs and 2,500 pcs")).toBe(2500);
+    expect(parseQuantity("2 ply 30 x 30 cm")).toBeNull();
+  });
+  it("a business-fit lead outranks the same lead with an unrelated product elsewhere", () => {
+    const good = scoreWithBreakdown(base, cfg);
+    const bad = scoreWithBreakdown({ ...base, requirement: "Steel Bolts-10 Piece", city: "Nagaon", state: "Assam", source: "JustDial" }, cfg);
+    expect(good.total).toBeGreaterThan(bad.total + 30);
+    expect(good.parts.map((p) => p.label)).toEqual(expect.arrayContaining(["Product match", "Order quantity", "Location", "Source"]));
+    expect(bad.parts.find((p) => p.label === "No product you sell")?.points).toBe(-10);
+  });
+  it("negative product keywords push down, score stays within 0-100", () => {
+    expect(scoreForLead({ ...base, requirement: "Baby Diaper-200 Piece" }, cfg)).toBeLessThan(scoreForLead({ ...base, requirement: "Baby Wipes-200 Piece" }, cfg));
+    for (const l of [base, {}, { phone: null }]) {
+      const s = scoreForLead(l, cfg);
+      expect(s).toBeGreaterThanOrEqual(0);
+      expect(s).toBeLessThanOrEqual(100);
+    }
+  });
+  it("default rules give a sane generic score and validation rejects out-of-range weights", () => {
+    expect(scoreForLead(base, DEFAULT_RANKING)).toBeGreaterThan(40);
+    expect(rankingSchema.safeParse({ ...cfg, products: [{ keyword: "x1", weight: 99 }] }).success).toBe(false);
   });
 });

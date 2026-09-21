@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getSession, unauthorized } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { updateLead } from "@/lib/leads";
+import { getRankingConfig, scoreWithBreakdown } from "@/lib/ranking";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -13,7 +14,8 @@ export async function GET(_: Request, { params }: Ctx) {
   const lead = await prisma.lead.findFirst({ where: { id, orgId: s.oid }, include: { interactions: { orderBy: { createdAt: "desc" }, take: 50 } } });
   if (!lead) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const { raw, ...rest } = lead;
-  return NextResponse.json({ ...rest, raw: JSON.parse(raw) });
+  const breakdown = scoreWithBreakdown(rest, await getRankingConfig(s.oid));
+  return NextResponse.json({ ...rest, raw: JSON.parse(raw), scoreParts: breakdown.parts, scoreNow: breakdown.total });
 }
 
 const Patch = z.object({

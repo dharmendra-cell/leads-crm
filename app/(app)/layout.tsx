@@ -7,6 +7,7 @@ const NAV = [
   ["/dashboard", "Dashboard"],
   ["/leads", "Leads"],
   ["/import", "Import"],
+  ["/ranking", "Ranking"],
   ["/ask", "Ask & Insights"],
 ];
 
