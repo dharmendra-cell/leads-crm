@@ -3,10 +3,11 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import LeadTable from "@/components/LeadTable";
 import FilterBar from "@/components/FilterBar";
+import ClassifyRemarks from "@/components/ClassifyRemarks";
 import { DIMENSIONS, DIM_LABEL, statusLabel, type Dimension } from "@/lib/constants";
 
 interface Bucket { key: string; count: number }
-interface Prog { key: string; total: number; notCalled: number; notPicked: number; connected: number; attempts: number }
+interface Prog { key: string; total: number; notCalled: number; notPicked: number; connected: number; pending: number; attempts: number }
 interface Stats {
   kpis: { total: number; contacted: number; interested: number; won: number; dueToday: number; hotUntouched: number };
   breakdowns: Record<Dimension, Bucket[]>;
@@ -58,6 +59,7 @@ function Inner() {
   return (
     <div className="space-y-5">
       <FilterBar basePath="/dashboard" />
+      <ClassifyRemarks onDone={load} />
       <div className="flex flex-wrap items-center gap-1 text-sm">
         <button className="text-blue-600 hover:underline" onClick={() => router.push("/dashboard")}>All leads</button>
         {path.map(([d, v], i) => (
@@ -111,11 +113,12 @@ function Kpi({ label, value, sub, tone, onClick }: { label: string; value?: numb
 
 function CallProgress({ rows, by, onBy, onPick, canDrill }: { rows: Prog[]; by: Dimension; onBy: (d: Dimension) => void; onPick: (k: string) => void; canDrill: boolean }) {
   const sum = (f: keyof Omit<Prog, "key">) => rows.reduce((a, r) => a + r[f], 0);
-  const all: Prog = { key: "All", total: sum("total"), notCalled: sum("notCalled"), notPicked: sum("notPicked"), connected: sum("connected"), attempts: sum("attempts") };
+  const all: Prog = { key: "All", total: sum("total"), notCalled: sum("notCalled"), notPicked: sum("notPicked"), connected: sum("connected"), pending: sum("pending"), attempts: sum("attempts") };
   const Bar = ({ r }: { r: Prog }) => (
     <div className="flex h-3 rounded overflow-hidden bg-gray-100 min-w-[140px]">
       <div className="bg-emerald-500" style={{ width: `${(r.connected / Math.max(1, r.total)) * 100}%` }} title={`Connected ${r.connected}`} />
       <div className="bg-amber-400" style={{ width: `${(r.notPicked / Math.max(1, r.total)) * 100}%` }} title={`Not picked ${r.notPicked}`} />
+      <div className="bg-sky-300" style={{ width: `${(r.pending / Math.max(1, r.total)) * 100}%` }} title={`Remarks not classified ${r.pending}`} />
       <div className="bg-gray-300" style={{ width: `${(r.notCalled / Math.max(1, r.total)) * 100}%` }} title={`Not called ${r.notCalled}`} />
     </div>
   );
@@ -131,13 +134,14 @@ function CallProgress({ rows, by, onBy, onPick, canDrill }: { rows: Prog[]; by: 
         <span className="text-xs text-gray-500 flex gap-3">
           <span><i className="inline-block w-2 h-2 rounded-sm bg-emerald-500" /> Connected</span>
           <span><i className="inline-block w-2 h-2 rounded-sm bg-amber-400" /> Not picked</span>
+          <span><i className="inline-block w-2 h-2 rounded-sm bg-sky-300" /> Remarks not classified</span>
           <span><i className="inline-block w-2 h-2 rounded-sm bg-gray-300" /> Not called yet</span>
         </span>
       </div>
       <div className="overflow-auto max-h-96">
         <table className="w-full text-sm">
           <thead className="text-xs text-gray-500 text-left sticky top-0 bg-white">
-            <tr><th className="py-1">{DIM_LABEL[by].split(" (")[0]}</th><th className="text-right">Available</th><th className="text-right">Called</th><th className="text-right">Connected</th><th className="text-right">Not picked</th><th className="text-right">Not called yet</th><th className="text-right">Total calls</th><th className="pl-4">Split</th></tr>
+            <tr><th className="py-1">{DIM_LABEL[by].split(" (")[0]}</th><th className="text-right">Available</th><th className="text-right">Called</th><th className="text-right">Connected</th><th className="text-right">Not picked</th><th className="text-right">Not called yet</th><th className="text-right">Unclassified</th><th className="text-right">Total calls</th><th className="pl-4">Split</th></tr>
           </thead>
           <tbody>
             {[all, ...rows].map((r, i) => (
@@ -148,6 +152,7 @@ function CallProgress({ rows, by, onBy, onPick, canDrill }: { rows: Prog[]; by: 
                 <td className="text-right text-emerald-700">{r.connected}</td>
                 <td className="text-right text-amber-700">{r.notPicked} <span className="text-gray-400 font-normal">{pct(r.notPicked, r.total - r.notCalled)}</span></td>
                 <td className="text-right text-gray-600">{r.notCalled}</td>
+                <td className="text-right text-sky-700">{r.pending}</td>
                 <td className="text-right">{r.attempts}</td>
                 <td className="pl-4"><Bar r={r} /></td>
               </tr>

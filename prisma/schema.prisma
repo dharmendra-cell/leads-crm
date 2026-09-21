@@ -82,6 +82,8 @@ model Lead {
   status       String        @default("NEW")
   score        Int           @default(0)
   callAttempts Int           @default(0)
+  // Imported remarks whose meaning the rules could not read; the status stays New until "Classify remarks" is run.
+  remarkPending Boolean      @default(false)
   nextFollowUp DateTime?
   notes        String?
   raw          String        @default("{}") // original row JSON, nothing is lost
@@ -94,6 +96,7 @@ model Lead {
   @@unique([orgId, phone])
   @@index([orgId, source, status])
   @@index([orgId, nextFollowUp])
+  @@index([orgId, remarkPending])
 }
 
 model Interaction {

@@ -4,7 +4,7 @@ import { parseDate } from "./dates";
 import { FIELDS, type Mapping } from "./mapping";
 import type { Row } from "./parse";
 import { STATES } from "./geo";
-import { classifyText, inferStatus, llmInferStatuses } from "./feedback";
+import { classifyText, inferStatus } from "./feedback";
 import { randomUUID } from "crypto";
 
 export interface Step {
@@ -30,6 +30,7 @@ export interface LeadInput {
   externalId: string | null;
   status: string;
   callAttempts: number;
+  remarkPending: boolean;
   feedback: string[];
   score: number;
   raw: string;
@@ -131,6 +132,7 @@ export function transformRows(rows: Row[], mapping: Mapping, source: string, now
       externalId: clean(get("externalId"), 100),
       status: "NEW",
       callAttempts: feedback.length,
+      remarkPending: false,
       feedback: feedback.map((f) => f.slice(0, 1000)),
       score: 0,
       raw: JSON.stringify(r),
@@ -167,27 +169,26 @@ export async function commitImport(args: {
     };
   });
 
+  // Remarks are read with fast rules only. Unclear ones are flagged and can be classified later in batches
+  // ("Classify remarks" button), so a sheet never waits on the LLM or its rate limits.
   await time("read_feedback", async () => {
     const withFb = leads.filter((l) => l.feedback.length);
     if (!withFb.length) return { status: "skipped" as const, detail: "No feedback/remark columns mapped", value: null };
     let byRule = 0;
-    const unresolved: { id: number; text: string }[] = [];
-    withFb.forEach((l, idx) => {
+    let pending = 0;
+    for (const l of withFb) {
       const st = inferStatus(l.feedback);
       if (st) {
         l.status = st;
         byRule++;
       } else if (l.feedback.some((f) => classifyText(f) !== "NEW")) {
-        unresolved.push({ id: idx, text: l.feedback.join(" || ").slice(0, 500) });
+        l.remarkPending = true;
+        pending++;
       }
-    });
-    const viaLlm = await llmInferStatuses(unresolved);
-    viaLlm.forEach((st, idx) => (withFb[idx].status = st));
-    const left = unresolved.length - viaLlm.size;
-    left > 0 && withFb.forEach((l, idx) => { if (l.status === "NEW" && unresolved.some((u) => u.id === idx)) l.status = "PICKED"; });
+    }
     return {
-      status: left > 0 ? ("warn" as const) : ("ok" as const),
-      detail: `${withFb.length} leads had remarks -> status set by rules for ${byRule}, by Groq for ${viaLlm.size}${left ? `, ${left} unclear (defaulted to Picked)` : ""}`,
+      status: pending ? ("warn" as const) : ("ok" as const),
+      detail: `${withFb.length} leads had remarks -> status set by rules for ${byRule}; ${pending} unclear remarks are waiting for "Classify remarks" (their text is saved in history)`,
       value: null,
     };
   });

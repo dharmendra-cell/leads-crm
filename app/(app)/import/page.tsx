@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { KNOWN_SOURCES } from "@/lib/constants";
+import ClassifyRemarks from "@/components/ClassifyRemarks";
 
 const FIELDS = ["name", "phone", "altPhone", "email", "company", "city", "state", "address", "requirement", "message", "queryDate", "externalId"] as const;
 type Mapping = Record<(typeof FIELDS)[number], string | null> & { feedback: string[] };
@@ -10,27 +10,23 @@ interface Sheet {
   name: string; headers: string[]; sample: Record<string, string>[]; totalRows: number; mapping: Mapping;
   sourceGuess: string | null; origin: string; steps: Step[]; include: boolean;
 }
-interface SheetState extends Sheet { source: string; open: boolean }
-interface Result {
-  totals: { inserted: number; duplicates: number; invalid: number };
-  sheets: { sheet: string; source: string; inserted: number; duplicates: number; invalid: number; steps: Step[] }[];
-}
-
+interface Imported { inserted: number; duplicates: number; invalid: number; steps: Step[] }
+interface SheetState extends Sheet { source: string; open: boolean; busy: boolean; error: string; done: Imported | null }
 const icon = (s: string) => ({ ok: "✓", warn: "!", skipped: "-", error: "✗" }[s] ?? "•");
 
 export default function ImportPage() {
   const [file, setFile] = useState<File | null>(null);
   const [sheets, setSheets] = useState<SheetState[] | null>(null);
   const [skipped, setSkipped] = useState<{ name: string; reason: string }[]>([]);
-  const [result, setResult] = useState<Result | null>(null);
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
   const [history, setHistory] = useState<{ id: string; fileName: string; source: string; inserted: number; duplicates: number; createdAt: string; steps: Step[] }[]>([]);
+  const [refresh, setRefresh] = useState(0);
   const loadHistory = async () => setHistory(await (await fetch("/api/import/history")).json());
   useEffect(() => { loadHistory(); }, []);
 
   async function upload(f: File) {
-    setFile(f); setSheets(null); setResult(null); setErr("");
+    setFile(f); setSheets(null); setErr("");
     setBusy("Reading every sheet and detecting its structure (this can take a few seconds per sheet)...");
     const fd = new FormData(); fd.append("file", f);
     const res = await fetch("/api/import/preview", { method: "POST", body: fd });
@@ -38,38 +34,34 @@ export default function ImportPage() {
     const j = await res.json();
     if (!res.ok) return setErr(j.error ?? "Upload failed");
     setSkipped(j.skipped);
-    setSheets((j.sheets as Sheet[]).map((s) => ({ ...s, source: s.sourceGuess ?? "", open: false })));
+    setSheets((j.sheets as Sheet[]).map((s) => ({ ...s, source: s.sourceGuess ?? "", open: false, busy: false, error: "", done: null })));
   }
 
   const upd = (i: number, patch: Partial<SheetState>) => setSheets((all) => all && all.map((s, k) => (k === i ? { ...s, ...patch } : s)));
-  const selected = sheets?.filter((s) => s.include) ?? [];
-  const problems = selected.filter((s) => !s.source.trim() || (!s.mapping.phone && !s.mapping.email));
+  const totals = (sheets ?? []).reduce((t, s) => (s.done ? { n: t.n + 1, inserted: t.inserted + s.done.inserted, dup: t.dup + s.done.duplicates } : t), { n: 0, inserted: 0, dup: 0 });
+  const sheetProblem = (s: SheetState) => (!s.source.trim() ? "Enter a source name" : !s.mapping.phone && !s.mapping.email ? "Map a phone or email column" : "");
 
-  // One request per sheet: keeps each call well under serverless time limits and shows progress.
-  async function commit() {
+  // One request per sheet, started by that sheet's own Import button.
+  async function importSheet(i: number) {
     if (!file || !sheets) return;
-    setErr("");
-    const merged: Result = { totals: { inserted: 0, duplicates: 0, invalid: 0 }, sheets: [] };
-    for (let i = 0; i < selected.length; i++) {
-      const s = selected[i];
-      setBusy(`Importing sheet ${i + 1} of ${selected.length}: "${s.name}" (reading feedback, setting statuses, removing duplicates)...`);
-      const fd = new FormData();
-      fd.append("file", file);
-      fd.append("plan", JSON.stringify([{ name: s.name, source: s.source.trim(), mapping: s.mapping, steps: s.steps }]));
+    const s = sheets[i];
+    upd(i, { busy: true, error: "" });
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("plan", JSON.stringify([{ name: s.name, source: s.source.trim(), mapping: s.mapping, steps: s.steps }]));
+    let j: { error?: string; sheets?: Imported[]; totals?: Imported };
+    let ok = false;
+    try {
       const res = await fetch("/api/import/commit", { method: "POST", body: fd });
-      const j = await res.json().catch(() => ({ error: `Server error (${res.status})` }));
-      if (!res.ok) {
-        setBusy("");
-        setErr(`Stopped at "${s.name}": ${j.error ?? "Import failed"}. Sheets before it were imported; re-uploading is safe (duplicates are skipped).`);
-        if (merged.sheets.length) setResult(merged);
-        loadHistory();
-        return;
-      }
-      merged.sheets.push(...j.sheets);
-      (Object.keys(merged.totals) as (keyof Result["totals"])[]).forEach((k) => (merged.totals[k] += j.totals[k]));
+      ok = res.ok;
+      j = await res.json().catch(() => ({ error: `Server error (${res.status}). Re-importing this sheet is safe: duplicates are skipped.` }));
+    } catch {
+      j = { error: "Network error. Re-importing this sheet is safe: duplicates are skipped." };
     }
-    setBusy("");
-    setResult(merged); setSheets(null); loadHistory();
+    if (!ok || !j.sheets?.[0]) return upd(i, { busy: false, error: j.error ?? "Import failed" });
+    upd(i, { busy: false, open: false, done: j.sheets[0] });
+    loadHistory();
+    setRefresh((n) => n + 1);
   }
 
   return (
@@ -82,24 +74,36 @@ export default function ImportPage() {
         {err && <p className="text-sm text-red-600 mt-3">{err}</p>}
       </div>
 
+      <ClassifyRemarks refreshKey={refresh} />
+
       {sheets && (
         <div className="space-y-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <p className="text-sm text-gray-600">{sheets.length} sheets found, {selected.length} selected ({selected.reduce((a, s) => a + s.totalRows, 0)} rows).</p>
-            <button className="btn btn-primary ml-auto" disabled={!!busy || !selected.length || problems.length > 0} onClick={commit}>Import {selected.length} sheet(s)</button>
-          </div>
-          {problems.length > 0 && <p className="text-sm text-red-600">Fix: {problems.map((p) => p.name).join(", ")} need a source name and a phone or email column (or untick them).</p>}
+          <p className="text-sm text-gray-600">
+            {sheets.length} sheets found. Review each one and click its own <b>Import</b> button.
+            {totals.n > 0 && <> Imported so far: <b>{totals.n}</b> sheet(s), <b>{totals.inserted}</b> new leads, {totals.dup} duplicates.</>}
+          </p>
           {skipped.length > 0 && <p className="text-xs text-gray-500">Skipped empty sheets: {skipped.map((s) => s.name).join(", ")}</p>}
 
           {sheets.map((s, i) => (
-            <div key={s.name} className={`card p-4 space-y-3 ${s.include ? "" : "opacity-60"}`}>
+            <div key={s.name} className={`card p-4 space-y-3 ${s.done ? "border-emerald-300" : !s.include ? "opacity-70" : ""}`}>
               <div className="flex flex-wrap items-center gap-3">
-                <input type="checkbox" checked={s.include} onChange={(e) => upd(i, { include: e.target.checked })} />
                 <b className="text-sm">{s.name}</b>
                 <span className="text-xs text-gray-500">{s.totalRows} rows - mapped by {s.origin === "none" ? "n/a (no contacts found)" : s.origin}</span>
-                <input list="sources" className="input w-44 ml-auto" placeholder="Source" value={s.source} onChange={(e) => upd(i, { source: e.target.value })} />
+                <input list="sources" className="input w-44 ml-auto" placeholder="Source" value={s.source} disabled={!!s.done || s.busy} onChange={(e) => upd(i, { source: e.target.value })} />
                 <button className="btn" onClick={() => upd(i, { open: !s.open })}>{s.open ? "Hide" : "Review"}</button>
+                <button className="btn btn-primary" disabled={s.busy || !!s.done || !!sheetProblem(s)} title={sheetProblem(s)} onClick={() => importSheet(i)}>
+                  {s.busy ? "Importing..." : s.done ? "Imported ✓" : "Import this sheet"}
+                </button>
               </div>
+              {s.busy && <p className="text-xs text-indigo-600">Importing: normalising, reading remarks, removing duplicates...</p>}
+              {s.error && <p className="text-xs text-red-600">{s.error}</p>}
+              {!s.done && !s.busy && sheetProblem(s) && s.include && <p className="text-xs text-amber-700">{sheetProblem(s)} to enable Import.</p>}
+              {s.done && (
+                <details>
+                  <summary className="text-sm text-emerald-700 cursor-pointer">Imported: +{s.done.inserted} new, {s.done.duplicates} duplicates, {s.done.invalid} without usable contact</summary>
+                  <div className="mt-2"><AgentSteps steps={s.done.steps} /></div>
+                </details>
+              )}
               {s.steps.some((x) => x.status === "warn") && !s.open && <p className="text-xs text-amber-700">{s.steps.filter((x) => x.status === "warn").map((x) => x.detail).join(" | ").slice(0, 220)}</p>}
               {s.open && (
                 <>
@@ -107,7 +111,7 @@ export default function ImportPage() {
                   <div className="grid sm:grid-cols-3 gap-2">
                     {FIELDS.map((f) => (
                       <label key={f} className="text-xs text-gray-500">{f}
-                        <select className="input mt-1" value={s.mapping[f] ?? ""} onChange={(e) => upd(i, { mapping: { ...s.mapping, [f]: e.target.value || null } })}>
+                        <select className="input mt-1" disabled={!!s.done || s.busy} value={s.mapping[f] ?? ""} onChange={(e) => upd(i, { mapping: { ...s.mapping, [f]: e.target.value || null } })}>
                           <option value="">- none -</option>
                           {s.headers.map((h) => <option key={h} value={h}>{h}</option>)}
                         </select>
@@ -119,7 +123,7 @@ export default function ImportPage() {
                     <div className="flex flex-wrap gap-2">
                       {s.headers.map((h) => {
                         const on = s.mapping.feedback.includes(h);
-                        return <button key={h} type="button" className={`btn ${on ? "btn-primary" : ""}`} onClick={() => upd(i, { mapping: { ...s.mapping, feedback: on ? s.mapping.feedback.filter((x) => x !== h) : [...s.mapping.feedback, h] } })}>{h}</button>;
+                        return <button key={h} type="button" disabled={!!s.done || s.busy} className={`btn ${on ? "btn-primary" : ""}`} onClick={() => upd(i, { mapping: { ...s.mapping, feedback: on ? s.mapping.feedback.filter((x) => x !== h) : [...s.mapping.feedback, h] } })}>{h}</button>;
                       })}
                     </div>
                   </div>
@@ -132,19 +136,6 @@ export default function ImportPage() {
             </div>
           ))}
           <datalist id="sources">{KNOWN_SOURCES.map((s) => <option key={s} value={s} />)}</datalist>
-        </div>
-      )}
-
-      {result && (
-        <div className="card p-5 space-y-3">
-          <h2 className="font-semibold">Import complete</h2>
-          <p className="text-sm"><b>{result.totals.inserted}</b> new leads - <b>{result.totals.duplicates}</b> duplicates merged - <b>{result.totals.invalid}</b> without usable contact</p>
-          <ul className="text-sm divide-y">
-            {result.sheets.map((s) => (
-              <li key={s.sheet} className="py-2"><details><summary className="cursor-pointer">{s.sheet} ({s.source}) - +{s.inserted} new, {s.duplicates} dup, {s.invalid} invalid</summary><div className="mt-2"><AgentSteps steps={s.steps} /></div></details></li>
-            ))}
-          </ul>
-          <Link className="btn btn-primary inline-block" href="/dashboard">Open dashboard</Link>
         </div>
       )}
 
