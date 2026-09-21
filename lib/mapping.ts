@@ -161,14 +161,36 @@ const LlmSchema = z.object({
   feedback_columns: z.array(z.string()).nullish(),
 });
 
-/** Ask Groq to map arbitrary headers to our schema. Only headers + 5 sample rows are sent. */
+const MAP_TIMEOUT_MS = 15000;
+const cell = (v: string) => (v.length > 80 ? v.slice(0, 80) + "..." : v);
+
+/**
+ * Free-tier Groq limits tokens per minute per model (8k). A workbook with many sheets is spread over several models
+ * (each sheet starts on a different one). groq/compound-mini is last: it calls llama/gpt-oss underneath and shares their limits.
+ * Override with MAPPING_MODELS="modelA,modelB".
+ */
+const mappingModels = (start = 0) => {
+  const all = process.env.MAPPING_MODELS?.split(",").map((m) => m.trim()).filter(Boolean) ?? ["qwen/qwen3.8-27b", "openai/gpt-oss-20b", "openai/gpt-oss-120b", "groq/compound-mini"];
+  const n = start % all.length;
+  return [...all.slice(n), ...all.slice(0, n)]; // rotate so consecutive sheets start on different models (separate rate-limit buckets)
+};
+
+/**
+ * Ask Groq to map arbitrary headers to our schema. Only headers + 3 sample rows are sent.
+ * Bounded: each call has a hard timeout and no SDK retries; pass `deadline` (epoch ms) so a whole workbook
+ * stays inside a serverless time limit. Returns null (caller falls back to rules) on any failure.
+ */
 export async function llmMap(
   headers: string[],
   rows: Row[],
+  opts: { deadline?: number; startModel?: number } = {},
 ): Promise<{ mapping: Mapping; sourceGuess: string | null } | null> {
   const client = groq();
   if (!client) return null;
-  const sample = rows.filter((r) => Object.values(r).filter(Boolean).length > 3).slice(0, 5);
+  const sample = rows
+    .filter((r) => Object.values(r).filter(Boolean).length > 3)
+    .slice(0, 3)
+    .map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, cell(v)])));
   const prompt = `You map columns of a messy B2B lead sheet (IndiaMART, TradeIndia, ExportersIndia, JustDial, Google Maps scrapes, hand-made call sheets) to a fixed schema.
 
 Schema fields: ${FIELDS.join(", ")}
@@ -183,36 +205,51 @@ Sample rows: ${JSON.stringify(sample)}
 
 Return JSON: {"source_guess": "IndiaMART|TradeIndia|ExportersIndia|JustDial|Google Maps|Direct|Unknown", "mapping": {"<field>": "<exact header or null>"}, "feedback_columns": ["<exact header>"]}.
 Use each header once, only headers from the list, null when nothing fits. Ignore serial-number and empty "Column N" headers.`;
-  try {
-    const res = await client.chat.completions.create({
-      model: MODEL,
-      temperature: 0,
-      response_format: { type: "json_object" },
-      messages: [{ role: "user", content: prompt }],
-    });
-    const parsed = LlmSchema.parse(JSON.parse(res.choices[0]?.message?.content ?? "{}"));
-    const valid = new Set(headers);
-    const mapping = emptyMapping();
-    const used = new Set<string>();
-    for (const h of parsed.feedback_columns ?? []) {
-      if (valid.has(h) && !used.has(h)) {
-        mapping.feedback.push(h);
-        used.add(h);
+
+  for (const model of mappingModels(opts.startModel ?? 0)) {
+    if (opts.deadline && Date.now() > opts.deadline) return null;
+    try {
+      const res = await client.chat.completions.create(
+        {
+          model,
+          temperature: 0,
+          ...(model.startsWith("openai/gpt-oss") ? ({ reasoning_effort: "low" } as object) : {}),
+          ...(model.startsWith("groq/compound") ? {} : { response_format: { type: "json_object" } }),
+          messages: [{ role: "user", content: prompt }],
+        },
+        { timeout: MAP_TIMEOUT_MS, maxRetries: 0 },
+      );
+      const raw = res.choices[0]?.message?.content ?? "{}";
+      const parsed = LlmSchema.parse(JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1)));
+      const valid = new Set(headers);
+      const mapping = emptyMapping();
+      const used = new Set<string>();
+      for (const h of parsed.feedback_columns ?? []) {
+        if (valid.has(h) && !used.has(h)) {
+          mapping.feedback.push(h);
+          used.add(h);
+        }
       }
-    }
-    for (const f of FIELDS) {
-      const h = parsed.mapping[f];
-      if (h && valid.has(h) && !used.has(h)) {
-        mapping[f] = h;
-        used.add(h);
+      for (const f of FIELDS) {
+        const h = parsed.mapping[f];
+        if (h && valid.has(h) && !used.has(h)) {
+          mapping[f] = h;
+          used.add(h);
+        }
       }
+      const sg = parsed.source_guess;
+      return { mapping, sourceGuess: sg && sg !== "Unknown" ? sg : null };
+    } catch (e) {
+      console.error(`llmMap ${model} failed:`, String((e as Error).message).slice(0, 160));
     }
-    const sg = parsed.source_guess;
-    return { mapping, sourceGuess: sg && sg !== "Unknown" ? sg : null };
-  } catch (e) {
-    console.error("llmMap failed, falling back to heuristics:", e);
-    return null;
   }
+  return null;
+}
+
+/** Are the rules alone good enough? Then the LLM is skipped (saves time and rate limit). */
+export function rulesAreConfident(mapping: Mapping, notes: string[]): boolean {
+  const mapped = FIELDS.filter((f) => mapping[f]).length;
+  return !!(mapping.phone || mapping.email) && mapped >= 4 && notes.length === 0;
 }
 
 /** primary wins; fallback fills only columns primary left unmapped. */

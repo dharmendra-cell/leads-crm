@@ -2,13 +2,13 @@ import { NextResponse } from "next/server";
 import { getSession, unauthorized } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { looksLikeLeads, parseWorkbook, type ParsedSheet } from "@/lib/parse";
-import { guessSource, headerSignature, heuristicMap, llmMap, mergeMappings, emptyMapping, validateByContent, type Mapping } from "@/lib/mapping";
+import { guessSource, headerSignature, heuristicMap, llmMap, mergeMappings, emptyMapping, validateByContent, rulesAreConfident, type Mapping } from "@/lib/mapping";
 import type { Step } from "@/lib/importer";
 
 const MAX_BYTES = 10 * 1024 * 1024;
 const MAX_LLM_PARALLEL = 3;
 
-async function analyse(orgId: string, sheet: ParsedSheet, fileName: string) {
+async function analyse(orgId: string, sheet: ParsedSheet, fileName: string, deadline: number, index: number) {
   const steps: Step[] = [];
   let t = Date.now();
   steps.push({
@@ -38,11 +38,27 @@ async function analyse(orgId: string, sheet: ParsedSheet, fileName: string) {
     steps.push({ step: "recognise_layout", status: "ok", detail: `Seen this layout before - reused saved mapping, no LLM call`, ms: Date.now() - t });
   } else {
     const heur = heuristicMap(sheet.headers, sheet.rows);
-    const llm = await llmMap(sheet.headers, sheet.rows);
-    mapping = llm ? mergeMappings(llm.mapping, heur) : heur;
-    sourceGuess = sourceGuess ?? llm?.sourceGuess ?? null;
-    origin = llm ? "llm" : "heuristic";
-    steps.push({ step: "map_columns", status: llm ? "ok" : "warn", detail: llm ? "Groq mapped columns (headers + sample rows only), gaps filled by rules" : "No Groq key/response - used rule-based mapping", ms: Date.now() - t });
+    const rulesCheck = validateByContent(heur, sheet.headers, sheet.rows);
+    if (rulesAreConfident(rulesCheck.mapping, rulesCheck.notes)) {
+      mapping = heur;
+      origin = "rules";
+      steps.push({ step: "map_columns", status: "ok", detail: "Column names and data agree - rule-based mapping is confident, AI not needed", ms: Date.now() - t });
+    } else {
+      const llm = await llmMap(sheet.headers, sheet.rows, { deadline, startModel: index });
+      mapping = llm ? mergeMappings(llm.mapping, heur) : heur;
+      sourceGuess = sourceGuess ?? llm?.sourceGuess ?? null;
+      origin = llm ? "llm" : "heuristic";
+      steps.push({
+        step: "map_columns",
+        status: llm ? "ok" : "warn",
+        detail: llm
+          ? "Layout was unusual, so Groq mapped the columns (headers + sample rows only); gaps filled by rules"
+          : Date.now() > deadline
+            ? "AI time budget used up for this upload - rule-based mapping (check it in Review)"
+            : "AI unavailable or rate-limited - used rule-based mapping (check it in Review)",
+        ms: Date.now() - t,
+      });
+    }
   }
   const checked = validateByContent(mapping, sheet.headers, sheet.rows);
   mapping = checked.mapping;
@@ -69,6 +85,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: (e as Error).message }, { status: 400 });
   }
 
+  // All sheets share one AI time budget so a big workbook always answers inside the serverless limit.
+  const deadline = Date.now() + 35000;
   // Analyse sheets with bounded parallelism to respect Groq free-tier rate limits.
   const results: Awaited<ReturnType<typeof analyse>>[] = new Array(wb.sheets.length);
   let next = 0;
@@ -76,7 +94,7 @@ export async function POST(req: Request) {
     Array.from({ length: Math.min(MAX_LLM_PARALLEL, wb.sheets.length) }, async () => {
       while (next < wb.sheets.length) {
         const i = next++;
-        results[i] = await analyse(s.oid, wb.sheets[i], file.name);
+        results[i] = await analyse(s.oid, wb.sheets[i], file.name, deadline, i);
       }
     }),
   );
