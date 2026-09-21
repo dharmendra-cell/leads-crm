@@ -5,6 +5,7 @@ import { getRankingConfig } from "@/lib/ranking";
 import { headerSignature } from "@/lib/mapping";
 import { parsePasted } from "@/lib/paste";
 import { embedPendingLeads } from "@/lib/embeddings";
+import { PASTED_LEADS_NAME } from "@/lib/constants";
 
 export const maxDuration = 60;
 
@@ -42,7 +43,7 @@ export async function POST(req: Request) {
   if (!parsed.mapping.phone && !parsed.mapping.email) return NextResponse.json({ error: "Could not find a phone number or email in the pasted text." }, { status: 400 });
   const result = await commitImport({
     orgId: s.oid,
-    fileName: "Pasted leads",
+    fileName: PASTED_LEADS_NAME,
     source: src,
     rows: parsed.rows,
     mapping: parsed.mapping,

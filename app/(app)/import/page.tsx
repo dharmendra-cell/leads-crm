@@ -21,7 +21,8 @@ export default function ImportPage() {
   const [skipped, setSkipped] = useState<{ name: string; reason: string }[]>([]);
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
-  const [history, setHistory] = useState<{ id: string; fileName: string; source: string; inserted: number; duplicates: number; createdAt: string; steps: Step[] }[]>([]);
+  type Hist = { id: string; fileName: string; source: string; inserted: number; duplicates: number; createdAt: string; steps: Step[]; leadNames?: string[] };
+  const [history, setHistory] = useState<{ uploads: Hist[]; pasted: Hist[] }>({ uploads: [], pasted: [] });
   const [refresh, setRefresh] = useState(0);
   const [notice, setNotice] = useState("");
   const loadHistory = async () => setHistory(await (await fetch("/api/import/history")).json());
@@ -171,16 +172,36 @@ export default function ImportPage() {
         </div>
       )}
 
-      {history.length > 0 && (
+      {history.uploads.length > 0 && (
         <div className="card p-5">
-          <h2 className="font-semibold mb-2">Previous imports</h2>
+          <h2 className="font-semibold mb-2">Previous sheet uploads <span className="text-xs font-normal text-gray-400">({history.uploads.length})</span></h2>
           <ul className="text-sm divide-y">
-            {history.map((h) => (
+            {history.uploads.map((h) => (
               <li key={h.id} className="py-2 flex items-start gap-3">
                 <details className="flex-1">
                   <summary className="cursor-pointer">{h.fileName} - {h.source} - {h.inserted} new, {h.duplicates} dup - {new Date(h.createdAt).toLocaleDateString("en-IN")}</summary>
                   <div className="mt-2"><AgentSteps steps={h.steps} /></div>
                 </details>
+                <button className="btn text-red-700 border-red-200 hover:bg-red-50" onClick={() => deleteImport(h)}>Delete</button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {history.pasted.length > 0 && (
+        <div className="card p-5">
+          <h2 className="font-semibold mb-2">Previous pasted leads <span className="text-xs font-normal text-gray-400">({history.pasted.length})</span></h2>
+          <ul className="text-sm divide-y">
+            {history.pasted.map((h) => (
+              <li key={h.id} className="py-2 flex items-start gap-3">
+                <div className="flex-1">
+                  <div>
+                    {new Date(h.createdAt).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })} - {h.source} -{" "}
+                    {h.inserted > 0 ? <b>{h.inserted} new</b> : <span className="text-gray-500">0 new</span>}{h.duplicates > 0 && <>, {h.duplicates} already existed</>}
+                  </div>
+                  {h.leadNames && h.leadNames.length > 0 && <div className="text-xs text-gray-500">{h.leadNames.join(", ")}{h.inserted > 3 ? ` +${h.inserted - 3} more` : ""}</div>}
+                </div>
                 <button className="btn text-red-700 border-red-200 hover:bg-red-50" onClick={() => deleteImport(h)}>Delete</button>
               </li>
             ))}

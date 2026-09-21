@@ -44,3 +44,6 @@ const GROUPED = SOURCE_GROUPS.flatMap((g) => g.match as readonly string[]);
 export const groupOfSource = (source: string): string =>
   SOURCE_GROUPS.find((g) => (g.match as readonly string[]).includes(source))?.key ?? OTHER_SOURCE;
 export const knownSourceNames = () => [...GROUPED];
+
+/** Import records created by "Paste leads" use this file name; everything else is a sheet upload. */
+export const PASTED_LEADS_NAME = "Pasted leads";
