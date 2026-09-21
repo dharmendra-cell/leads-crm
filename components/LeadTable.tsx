@@ -41,6 +41,7 @@ export default function LeadTable({ filters, pageSize = 25, showControls = true,
             <option value="date">Enquiry date</option><option value="newest">Recently added</option>
           </select>
           <button className="btn" onClick={() => setAdding(true)}>+ Add direct lead</button>
+          <a className="btn" href="/import#paste">Paste leads</a>
           <a className="btn" href={`/api/leads/export?${params()}`}>Export Excel</a>
           <span className="ml-auto text-sm text-gray-500">{data ? `${data.total} leads` : "..."}</span>
         </div>

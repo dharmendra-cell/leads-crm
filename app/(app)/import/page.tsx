@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { KNOWN_SOURCES } from "@/lib/constants";
 import ClassifyRemarks from "@/components/ClassifyRemarks";
+import PasteLeads from "@/components/PasteLeads";
 
 const FIELDS = ["name", "phone", "altPhone", "email", "company", "city", "state", "address", "requirement", "message", "queryDate", "externalId"] as const;
 type Mapping = Record<(typeof FIELDS)[number], string | null> & { feedback: string[] };
@@ -102,6 +103,8 @@ export default function ImportPage() {
         {err && <p className="text-sm text-red-600 mt-3">{err}</p>}
         {notice && <p className="text-sm text-emerald-700 mt-3">{notice}</p>}
       </div>
+
+      <PasteLeads onChanged={() => { loadHistory(); setRefresh((n) => n + 1); }} />
 
       <ClassifyRemarks refreshKey={refresh} />
 

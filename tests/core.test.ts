@@ -238,3 +238,44 @@ describe("call activity buckets (IST)", () => {
     expect(bucketKey(new Date("2026-09-30T20:00:00Z"), "month")).toBe("2026-10");
   });
 });
+
+import { cellKind, parsePasted, splitPasted } from "../lib/paste";
+
+describe("pasted leads", () => {
+  const row = "2026-09-21\t07771975883\tImran Gori\tBumtum Diaper B Grade-4000 Pack\tIndore, Madhya Pradesh, India\tAayesha Collection\tgoriimran240@gmail.com";
+  it("recognises what each cell is", () => {
+    expect(cellKind("goriimran240@gmail.com")).toBe("email");
+    expect(cellKind("07771975883")).toBe("phone");
+    expect(cellKind("2026-09-21")).toBe("date");
+    expect(cellKind("Indore, Madhya Pradesh, India")).toBe("address");
+    expect(cellKind("Bumtum Diaper B Grade-4000 Pack")).toBe("requirement");
+    expect(cellKind("Imran Gori")).toBe("text");
+    expect(cellKind("")).toBe("empty");
+  });
+  it("turns the exact row from the sheet into a lead in any column order", async () => {
+    const p = await parsePasted(row, { useLlm: false });
+    const t = transformRows(p.rows, p.mapping, "IndiaMART");
+    expect(t.leads).toHaveLength(1);
+    expect(t.leads[0]).toMatchObject({
+      name: "Imran Gori", phone: "+917771975883", email: "goriimran240@gmail.com", company: "Aayesha Collection",
+      requirement: "Bumtum Diaper B Grade-4000 Pack", city: "Indore", state: "Madhya Pradesh",
+    });
+    expect(t.leads[0].queryDate?.getFullYear()).toBe(2026);
+  });
+  it("reads a shuffled layout and several rows", async () => {
+    const text = ["Ravi Kumar\tWet Wipes-5000 Piece\t+91 98765 43210\travi@x.com\tPune, Maharashtra, India\t2026-09-20", "Sita Devi\tTissue Roll-200 Roll\t9811122233\t\tJaipur, Rajasthan, India\t2026-09-19"].join("\n");
+    const p = await parsePasted(text, { useLlm: false });
+    const t = transformRows(p.rows, p.mapping, "TradeIndia");
+    expect(t.leads.map((l) => l.phone)).toEqual(["+919876543210", "+919811122233"]);
+    expect(t.leads.map((l) => l.name)).toEqual(["Ravi Kumar", "Sita Devi"]);
+    expect(t.leads[1].state).toBe("Rajasthan");
+  });
+  it("uses a pasted header row, and extra trailing text becomes remarks", async () => {
+    const withHeader = "Name\tMobile\tProduct\tRemarks\nAsha\t9876501234\tNapkin-100 Pack\tNot Answering";
+    const p = await parsePasted(withHeader, { useLlm: false });
+    const t = transformRows(p.rows, p.mapping, "X");
+    expect(t.leads[0]).toMatchObject({ name: "Asha", phone: "+919876501234" });
+    expect(t.leads[0].feedback).toEqual(["Not Answering"]);
+    expect(splitPasted("a\tb\n\nc\td")).toEqual([["a", "b"], ["c", "d"]]);
+  });
+});
