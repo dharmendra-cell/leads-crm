@@ -1,0 +1,12 @@
+@import "tailwindcss" source(none);
+@source "../app";
+@source "../components";
+
+body { background: #f6f7f9; color: #111827; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+.card { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; }
+.btn { border-radius: 8px; padding: 6px 12px; font-size: 14px; font-weight: 500; border: 1px solid #d1d5db; background: #fff; }
+.btn:hover { background: #f3f4f6; }
+.btn-primary { background: #111827; color: #fff; border-color: #111827; }
+.btn-primary:hover { background: #1f2937; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.input { border: 1px solid #d1d5db; border-radius: 8px; padding: 6px 10px; font-size: 14px; background: #fff; width: 100%; }

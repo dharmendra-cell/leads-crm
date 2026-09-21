@@ -1,0 +1,111 @@
+// Postgres + pgvector. Local: `docker compose up -d`. Prod: Neon/RDS (both support pgvector).
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  directUrl  = env("DIRECT_URL") // non-pooled URL used by migrations (Neon)
+  extensions = [vector]
+}
+
+model Organization {
+  id        String            @id @default(cuid())
+  name      String
+  createdAt DateTime          @default(now())
+  users     User[]
+  leads     Lead[]
+  imports   Import[]
+  templates MappingTemplate[]
+}
+
+model User {
+  id           String       @id @default(cuid())
+  orgId        String
+  org          Organization @relation(fields: [orgId], references: [id])
+  email        String       @unique
+  name         String
+  passwordHash String
+  role         String       @default("ADMIN") // ADMIN | AGENT
+  createdAt    DateTime     @default(now())
+}
+
+// Saved column mapping per (org, sheet layout) so repeat uploads skip the LLM.
+model MappingTemplate {
+  id         String       @id @default(cuid())
+  orgId      String
+  org        Organization @relation(fields: [orgId], references: [id])
+  signature  String
+  sourceName String
+  mapping    String // JSON
+  createdAt  DateTime     @default(now())
+
+  @@unique([orgId, signature])
+}
+
+model Import {
+  id         String       @id @default(cuid())
+  orgId      String
+  org        Organization @relation(fields: [orgId], references: [id])
+  fileName   String
+  source     String
+  totalRows  Int
+  inserted   Int
+  duplicates Int
+  invalid    Int
+  steps      String // JSON agent trace
+  createdAt  DateTime     @default(now())
+  leads      Lead[]
+}
+
+model Lead {
+  id           String        @id @default(cuid())
+  orgId        String
+  org          Organization  @relation(fields: [orgId], references: [id])
+  importId     String?
+  import       Import?       @relation(fields: [importId], references: [id])
+  source       String
+  name         String?
+  phone        String?
+  altPhone     String?
+  email        String?
+  company      String?
+  city         String?
+  state        String?
+  address      String?
+  requirement  String?
+  message      String?
+  queryDate    DateTime?
+  externalId   String?
+  status       String        @default("NEW")
+  score        Int           @default(0)
+  callAttempts Int           @default(0)
+  nextFollowUp DateTime?
+  notes        String?
+  raw          String        @default("{}") // original row JSON, nothing is lost
+  // 384-dim MiniLM embedding of name/company/requirement/message for semantic search
+  embedding    Unsupported("vector(384)")?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  interactions Interaction[]
+
+  @@unique([orgId, phone])
+  @@index([orgId, source, status])
+  @@index([orgId, nextFollowUp])
+}
+
+model Interaction {
+  id        String   @id @default(cuid())
+  leadId    String
+  lead      Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  orgId     String
+  userName  String?
+  type      String // STATUS | NOTE | SYSTEM
+  outcome   String?
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@index([leadId])
+}
