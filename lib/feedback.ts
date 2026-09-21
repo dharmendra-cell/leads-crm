@@ -29,35 +29,52 @@ export function inferStatus(feedback: string[]): string | null {
   return null;
 }
 
-/** LLM fallback for remarks the rules could not read. Batched; returns id->status. Never throws. */
-export async function llmInferStatuses(items: { id: number; text: string }[]): Promise<Map<number, string>> {
+const LLM_BATCH = 30;
+const LLM_PARALLEL = 4;
+
+/**
+ * LLM fallback for remarks the rules could not read. Batches run in parallel and stop being started once
+ * `budgetMs` has passed, so a slow/rate-limited model can never push an import past a serverless time limit.
+ * Returns id->status for whatever finished. Never throws.
+ */
+export async function llmInferStatuses(items: { id: number; text: string }[], budgetMs = 20000): Promise<Map<number, string>> {
   const out = new Map<number, string>();
   const client = groq();
   if (!client || !items.length) return out;
-  for (let i = 0; i < items.length; i += 25) {
-    const batch = items.slice(i, i + 25);
-    try {
-      const res = await client.chat.completions.create({
-        model: MODEL,
-        temperature: 0,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "user",
-            content: `Caller remarks (English/Hindi/Hinglish) from a B2B lead sheet. For each item pick the lead's CURRENT status from: ${STATUS_KEYS.join(", ")}.
+  const deadline = Date.now() + budgetMs;
+  const batches: { id: number; text: string }[][] = [];
+  for (let i = 0; i < items.length; i += LLM_BATCH) batches.push(items.slice(i, i + LLM_BATCH));
+
+  let next = 0;
+  const worker = async () => {
+    while (next < batches.length && Date.now() < deadline) {
+      const batch = batches[next++];
+      try {
+        const res = await client.chat.completions.create({
+          model: MODEL,
+          temperature: 0,
+          // gpt-oss models "think" first; a low effort is plenty for short classification and much faster.
+          ...({ reasoning_effort: "low" } as object),
+          response_format: { type: "json_object" },
+          messages: [
+            {
+              role: "user",
+              content: `Caller remarks (English/Hindi/Hinglish) from a B2B lead sheet. For each item pick the lead's CURRENT status from: ${STATUS_KEYS.join(", ")}.
 NOT_PICKED = call not answered; PICKED = spoke but no decision; INTERESTED = wants price/sample/quote; NOT_INTERESTED = no requirement; LOST = bought elsewhere / price too high; WON = order confirmed; FOLLOW_UP = told to call later.
 Respond in JSON only: {"results":[{"id":<id>,"status":"<STATUS>"}]}.
 Items: ${JSON.stringify(batch)}`,
-          },
-        ],
-      });
-      const parsed = JSON.parse(res.choices[0]?.message?.content ?? "{}");
-      for (const r of parsed.results ?? []) {
-        if (typeof r.id === "number" && STATUS_KEYS.includes(r.status)) out.set(r.id, r.status);
+            },
+          ],
+        });
+        const parsed = JSON.parse(res.choices[0]?.message?.content ?? "{}");
+        for (const r of parsed.results ?? []) {
+          if (typeof r.id === "number" && STATUS_KEYS.includes(r.status)) out.set(r.id, r.status);
+        }
+      } catch (e) {
+        console.error("llmInferStatuses batch failed:", e);
       }
-    } catch (e) {
-      console.error("llmInferStatuses batch failed:", e);
     }
-  }
+  };
+  await Promise.all(Array.from({ length: Math.min(LLM_PARALLEL, batches.length) }, worker));
   return out;
 }
