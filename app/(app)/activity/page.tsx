@@ -13,13 +13,21 @@ const label = (period: string, k: string) => {
   return `${+d} ${MONTHS[+m - 1]} ${y.slice(2)}`;
 };
 const pct = (a: number, b: number) => (b ? `${Math.round((a / b) * 100)}%` : "-");
-const today = () => new Date().toLocaleDateString("en-CA");
-const daysAgo = (n: number) => new Date(Date.now() - n * 86400_000).toLocaleDateString("en-CA");
+// Always IST, evaluated when used (not once at page load), so a page left open past midnight still means "today".
+const ist = (ms: number) => new Date(ms).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+const today = () => ist(Date.now());
+const daysAgo = (n: number) => ist(Date.now() - n * 86400_000);
 
 export default function ActivityPage() {
   const [period, setPeriod] = useState<"day" | "week" | "month">("day");
-  const [from, setFrom] = useState(daysAgo(29));
-  const [to, setTo] = useState(today());
+  // Until the user picks dates by hand, the range follows "today": last N days ending today, recomputed on every refresh.
+  const [manual, setManual] = useState<{ from: string; to: string } | null>(null);
+  const [tick, setTick] = useState(0);
+  const [todayStat, setTodayStat] = useState<{ calls: number; leads: number } | null>(null);
+  const [updated, setUpdated] = useState("");
+  const span = period === "day" ? 29 : period === "week" ? 83 : 364;
+  const from = manual?.from ?? daysAgo(span);
+  const to = manual?.to ?? today();
   const [user, setUser] = useState("");
   const [data, setData] = useState<Data | null>(null);
   const [agents, setAgents] = useState<string[]>([]);
@@ -27,17 +35,27 @@ export default function ActivityPage() {
   const load = useCallback(async () => {
     const p = new URLSearchParams({ period, from, to });
     if (user) p.set("user", user);
-    const d: Data = await (await fetch(`/api/activity?${p}`)).json();
+    const t0 = today();
+    const [d, td] = await Promise.all([
+      fetch(`/api/activity?${p}`, { cache: "no-store" }).then((r) => r.json() as Promise<Data>),
+      fetch(`/api/activity?period=day&from=${t0}&to=${t0}${user ? `&user=${encodeURIComponent(user)}` : ""}`, { cache: "no-store" }).then((r) => r.json() as Promise<Data>),
+    ]);
     setData(d);
+    setTodayStat({ calls: td.total.calls, leads: td.total.uniqueLeads });
+    setUpdated(new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
     if (!user) setAgents(d.agents.map((a) => a.user));
-  }, [period, from, to, user]);
+  // `tick` re-runs this on the timer / focus so a new day or new calls show up without reloading the page.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [period, from, to, user, tick]);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const id = setInterval(() => setTick((n) => n + 1), 60_000);
+    const onFocus = () => setTick((n) => n + 1);
+    window.addEventListener("focus", onFocus);
+    return () => { clearInterval(id); window.removeEventListener("focus", onFocus); };
+  }, []);
 
-  const choose = (p: "day" | "week" | "month") => {
-    setPeriod(p);
-    setFrom(daysAgo(p === "day" ? 29 : p === "week" ? 83 : 364));
-    setTo(today());
-  };
+  const choose = (p: "day" | "week" | "month") => { setPeriod(p); setManual(null); };
   const t = data?.total;
   const max = Math.max(1, ...(data?.buckets.map((b) => b.calls) ?? [1]));
 
@@ -54,14 +72,22 @@ export default function ActivityPage() {
               <button key={p} className={`btn ${period === p ? "btn-primary" : ""}`} onClick={() => choose(p)}>{p === "day" ? "Daily" : p === "week" ? "Weekly" : "Monthly"}</button>
             ))}
           </div>
-          <label>From<input type="date" className="input mt-1 w-36" value={from} onChange={(e) => setFrom(e.target.value)} /></label>
-          <label>To<input type="date" className="input mt-1 w-36" value={to} onChange={(e) => setTo(e.target.value)} /></label>
+          <label>From<input type="date" className="input mt-1 w-36" value={from} onChange={(e) => setManual({ from: e.target.value, to })} /></label>
+          <label>To<input type="date" className="input mt-1 w-36" value={to} onChange={(e) => setManual({ from, to: e.target.value })} /></label>
           <label>Caller
             <select className="input mt-1 w-36" value={user} onChange={(e) => setUser(e.target.value)}>
               <option value="">Everyone</option>{agents.map((a) => <option key={a}>{a}</option>)}
             </select>
           </label>
         </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3 text-sm rounded-lg bg-indigo-50 border border-indigo-100 px-3 py-2">
+        <span><b>Today</b> ({today()}): <b>{todayStat?.calls ?? "-"}</b> calls, <b>{todayStat?.leads ?? "-"}</b> leads called</span>
+        <button className="btn" onClick={() => setManual({ from: today(), to: today() })}>Show only today</button>
+        {manual && <button className="btn" onClick={() => setManual(null)}>Back to last {span + 1} days</button>}
+        <span className="ml-auto text-xs text-gray-500">Updated {updated || "-"} · refreshes every minute</span>
+        <button className="btn" onClick={() => setTick((n) => n + 1)}>Refresh</button>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
